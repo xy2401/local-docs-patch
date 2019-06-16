@@ -1,0 +1,124 @@
+    <h3 id="01-NginxVariables02">Nginx 变量漫谈（二）</h3>
+<p>关于 Nginx 变量的另一个常见误区是认为变量容器的生命期，是与 <code>location</code> 配置块绑定的。其实不然。我们来看一个涉及“内部跳转”的例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/foo&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;hello;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_exec&nbsp;/bar;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/bar&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;a&nbsp;=&nbsp;[$a]&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里我们在 <code>location /foo</code> 中，使用第三方模块  <a href="http://wiki.nginx.org/HttpEchoModule" target="_blank">ngx_echo</a> 提供的  <a href="http://wiki.nginx.org/HttpEchoModule#echo_exec" target="_blank">echo_exec</a> 配置指令，发起到 <code>location /bar</code> 的“内部跳转”。所谓“内部跳转”，就是在处理请求的过程中，于服务器内部，从一个 <code>location</code> 跳转到另一个 <code>location</code> 的过程。这不同于利用 HTTP 状态码 <code>301</code> 和 <code>302</code> 所进行的“外部跳转”，因为后者是由 HTTP 客户端配合进行跳转的，而且在客户端，用户可以通过浏览器地址栏这样的界面，看到请求的 URL 地址发生了变化。内部跳转和 <code>Bourne Shell</code>（或 <code>Bash</code>）中的 <code>exec</code> 命令很像，都是“有去无回”。另一个相近的例子是 <code>C</code> 语言中的 <code>goto</code> 语句。
+</p>
+<p>既然是内部跳转，当前正在处理的请求就还是原来那个，只是当前的 <code>location</code> 发生了变化，所以还是原来的那一套 Nginx 变量的容器副本。对应到上例，如果我们请求的是 <code>/foo</code> 这个接口，那么整个工作流程是这样的：先在 <code>location /foo</code> 中通过  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令将 <code>$a</code> 变量的值赋为字符串 <code>hello</code>，然后通过  <a href="http://wiki.nginx.org/HttpEchoModule#echo_exec" target="_blank">echo_exec</a> 指令发起内部跳转，又进入到 <code>location /bar</code> 中，再输出 <code>$a</code> 变量的值。因为 <code>$a</code> 还是原来的 <code>$a</code>，所以我们可以期望得到 <code>hello</code> 这行输出。测试证实了这一点：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/foo<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;a&nbsp;=&nbsp;[hello]<br/>
+</code><p>但如果我们从客户端直接访问 <code>/bar</code> 接口，就会得到空的 <code>$a</code> 变量的值，因为它依赖于 <code>location /foo</code> 来对 <code>$a</code> 进行初始化。
+</p>
+<p>从上面这个例子我们看到，一个请求在其处理过程中，即使经历多个不同的 <code>location</code> 配置块，它使用的还是同一套 Nginx 变量的副本。这里，我们也首次涉及到了“内部跳转”这个概念。值得一提的是，标准  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的  <a href="http://wiki.nginx.org/HttpRewriteModule#rewrite" target="_blank">rewrite</a> 配置指令其实也可以发起“内部跳转”，例如上面那个例子用  <a href="http://wiki.nginx.org/HttpRewriteModule#rewrite" target="_blank">rewrite</a> 配置指令可以改写成下面这样的形式：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/foo&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;hello;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rewrite&nbsp;^&nbsp;/bar;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/bar&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;a&nbsp;=&nbsp;[$a]&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>其效果和使用  <a href="http://wiki.nginx.org/HttpEchoModule#echo_exec" target="_blank">echo_exec</a> 是完全相同的。后面我们还会专门介绍这个  <a href="http://wiki.nginx.org/HttpRewriteModule#rewrite" target="_blank">rewrite</a> 指令的更多用法，比如发起 <code>301</code> 和 <code>302</code> 这样的“外部跳转”。
+</p>
+<p>从上面这个例子我们看到，Nginx 变量值容器的生命期是与当前正在处理的请求绑定的，而与 <code>location</code> 无关。
+</p>
+<p>前面我们接触到的都是通过  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令隐式创建的 Nginx 变量。这些变量我们一般称为“用户自定义变量”，或者更简单一些，“用户变量”。既然有“用户自定义变量”，自然也就有由 Nginx 核心和各个 Nginx 模块提供的“预定义变量”，或者说“内建变量”（builtin variables）。
+</p>
+<p>Nginx 内建变量最常见的用途就是获取关于请求或响应的各种信息。例如由 <a href="http://nginx.org/en/docs/http/ngx_http_core_module.html" target="_blank">ngx_http_core</a> 模块提供的内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a>，可以用来获取当前请求的 URI（经过解码，并且不含请求参数），而  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_uri" target="_blank">$request_uri</a> 则用来获取请求最原始的 URI （未经解码，并且包含请求参数）。请看下面这个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;uri&nbsp;=&nbsp;$uri&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;request_uri&nbsp;=&nbsp;$request_uri&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里为了简单起见，连 <code>server</code> 配置块也省略了，和前面所有示例一样，我们监听的依然是 <code>8080</code> 端口。在这个例子里，我们把  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 和  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_uri" target="_blank">$request_uri</a> 的值输出到响应体中去。下面我们用不同的请求来测试一下这个 <code>/test</code> 接口：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;uri&nbsp;=&nbsp;/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;request_uri&nbsp;=&nbsp;/test<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?a=3&amp;b=4'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;uri&nbsp;=&nbsp;/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;request_uri&nbsp;=&nbsp;/test?a=3&amp;b=4<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test/hello%20world?a=3&amp;b=4'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;uri&nbsp;=&nbsp;/test/hello&nbsp;world<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;request_uri&nbsp;=&nbsp;/test/hello%20world?a=3&amp;b=4<br/>
+</code><p>另一个特别常用的内建变量其实并不是单独一个变量，而是有无限多变种的一群变量，即名字以 <code>arg_</code> 开头的所有变量，我们估且称之为  <a href="http://wiki.nginx.org/HttpCoreModule#.24arg_PARAMETER" target="_blank">$arg_XXX</a> 变量群。一个例子是 <code>$arg_name</code>，这个变量的值是当前请求名为 <code>name</code> 的 URI 参数的值，而且还是未解码的原始形式的值。我们来看一个比较完整的示例：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;name:&nbsp;$arg_name&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;class:&nbsp;$arg_class&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>然后在命令行上使用各种参数组合去请求这个 <code>/test</code> 接口：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?name=Tom&amp;class=3'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;Tom<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;3<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?name=hello%20world&amp;class=9'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;hello%20world<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;9<br/>
+</code><p>其实 <code>$arg_name</code> 不仅可以匹配 <code>name</code> 参数，也可以匹配 <code>NAME</code> 参数，抑或是 <code>Name</code>，等等：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?NAME=Marry'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;Marry<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?Name=Jimmy'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;Jimmy<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;<br/>
+</code><p>Nginx 会在匹配参数名之前，自动把原始请求中的参数名调整为全部小写的形式。
+</p>
+<p>如果你想对 URI 参数值中的 <code>%XX</code> 这样的编码序列进行解码，可以使用第三方  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块提供的  <a href="http://wiki.nginx.org/HttpSetMiscModule#set_unescape_uri" target="_blank">set_unescape_uri</a> 配置指令：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_unescape_uri&nbsp;$name&nbsp;$arg_name;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_unescape_uri&nbsp;$class&nbsp;$arg_class;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;name:&nbsp;$name&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;class:&nbsp;$class&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>现在我们再看一下效果：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?name=hello%20world&amp;class=9'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;name:&nbsp;hello&nbsp;world<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;class:&nbsp;9<br/>
+</code><p>空格果然被解码出来了！
+</p>
+<p>从这个例子我们同时可以看到，这个  <a href="http://wiki.nginx.org/HttpSetMiscModule#set_unescape_uri" target="_blank">set_unescape_uri</a> 指令也像  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令那样，拥有自动创建 Nginx 变量的功能。后面我们还会专门介绍到  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块。
+</p>
+<p>像  <a href="http://wiki.nginx.org/HttpCoreModule#.24arg_PARAMETER" target="_blank">$arg_XXX</a> 这种类型的变量拥有无穷无尽种可能的名字，所以它们并不对应任何存放值的容器。而且这种变量在 Nginx 核心中是经过特别处理的，第三方 Nginx 模块是不能提供这样充满魔法的内建变量的。
+</p>
+<p>类似  <a href="http://wiki.nginx.org/HttpCoreModule#.24arg_PARAMETER" target="_blank">$arg_XXX</a> 的内建变量还有不少，比如用来取 cookie 值的  <a href="http://wiki.nginx.org/HttpCoreModule#.24cookie_COOKIE" target="_blank">$cookie_XXX</a> 变量群，用来取请求头的  <a href="http://wiki.nginx.org/HttpCoreModule#.24http_HEADER" target="_blank">$http_XXX</a> 变量群，以及用来取响应头的  <a href="http://wiki.nginx.org/HttpCoreModule#.24sent_http_HEADER" target="_blank">$sent_http_XXX</a> 变量群。这里就不一一介绍了，感兴趣的读者可以参考 <a href="http://nginx.org/en/docs/http/ngx_http_core_module.html" target="_blank">ngx_http_core</a> 模块的官方文档。
+</p>
+<p>需要指出的是，许多内建变量都是只读的，比如我们刚才介绍的  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 和  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_uri" target="_blank">$request_uri</a>. 对只读变量进行赋值是应当绝对避免的，因为会有意想不到的后果，比如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;location&nbsp;/bad&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$uri&nbsp;/blah;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$uri;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;}<br/>
+</code><p>这个有问题的配置会让 Nginx 在启动的时候报出一条令人匪夷所思的错误：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[emerg]&nbsp;the&nbsp;duplicate&nbsp;&quot;uri&quot;&nbsp;variable&nbsp;in&nbsp;...<br/>
+</code><p>如果你尝试改写另外一些只读的内建变量，比如  <a href="http://wiki.nginx.org/HttpCoreModule#.24arg_PARAMETER" target="_blank">$arg_XXX</a> 变量，在某些 Nginx 的版本中甚至可能导致进程崩溃。</p>

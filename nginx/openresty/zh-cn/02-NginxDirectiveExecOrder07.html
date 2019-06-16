@@ -1,0 +1,63 @@
+    <h3 id="02-NginxDirectiveExecOrder07">Nginx 配置指令的执行顺序（七）</h3>
+<p>来看一个 <code>ngx_static</code> 模块服务磁盘文件的例子。我们使用下面这个配置片段：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;root&nbsp;/var/www/;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>同时在本机的 <code>/var/www/</code> 目录下创建两个文件，一个文件叫做 <code>index.html</code>，内容是一行文本 <code>this is my home</code>；另一个文件叫做 <code>hello.html</code>，内容是一行文本 <code>hello world</code>. 同时注意这两个文件的权限设置，确保它们都对运行 Nginx worker 进程的系统帐户可读。
+</p>
+<p>现在来通过 HTTP 协议请求一下这两个文件所对应的 URI：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/index.html'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;this&nbsp;is&nbsp;my&nbsp;home<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/hello.html'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;hello&nbsp;world<br/>
+</code><p>我们看到，先前创建的那两个磁盘文件的内容被分别输出了。
+</p>
+<p>不妨来分析一下这里发生的事情：<code>location /</code> 中没有使用运行在 <code>content</code> 阶段的模块指令，于是也就没有模块注册这个 <code>location</code> 的“内容处理程序”，处理权便自动落到了在 <code>content</code> 阶段“垫底”的那 3 个静态资源服务模块。首先运行的  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 和  <a href="http://wiki.nginx.org/HttpAutoindexModule" target="_blank">ngx_autoindex</a> 模块先后看到当前请求的 URI，<code>/index.html</code> 和 <code>/hello.html</code>，并不以 <code>/</code> 结尾，于是直接弃权，将处理权转给了最后运行的 <code>ngx_static</code> 模块。<code>ngx_static</code> 模块根据  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 指令指定的“文档根目录”（document root），分别将请求 URI <code>/index.html</code> 和 <code>/hello.html</code> 映射为文件系统路径 <code>/var/www/index.html</code> 和 <code>/var/www/hello.html</code>，在确认这两个文件存在后，将它们的内容分别作为响应体输出，并自动设置 <code>Content-Type</code>、<code>Content-Length</code> 以及 <code>Last-Modified</code> 等响应头。
+</p>
+<p>为了确认 <code>ngx_static</code> 模块确实运行了，可以启用 <a href="#02-NginxDirectiveExecOrder01">（一）</a> 中介绍过的 Nginx “调试日志”，然后再次请求 <code>/index.html</code> 这个接口。此时，在 Nginx 错误日志文件中可以看到类似下面这一行的调试信息：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;3033#0:&nbsp;*1&nbsp;http&nbsp;static&nbsp;fd:&nbsp;8<br/>
+</code><p>这一行信息便是 <code>ngx_static</code> 模块生成的，其含义是“正在输出的静态文件的描述符是数字 <code>8</code>”。当然，具体的文件描述符编号会经常发生变化，这里只是我机器的一次典型输出。值得一提的是，能生成这一行调试信息的还有标准模块  <a href="http://wiki.nginx.org/HttpGzipStaticModule" target="_blank">ngx_gzip_static</a> ，但它默认是不启用的，后面会专门介绍到这个模块。
+</p>
+<p>注意上面这个例子中使用的  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 配置指令只起到了声明“文档根目录”的作用，并不是它开启了 <code>ngx_static</code> 模块。<code>ngx_static</code> 模块总是处于开启状态，但是否轮得到它运行就要看 <code>content</code> 阶段先于它运行的那些模块是否“弃权”了。为了进一步确认这一点，来看下面这个空白 <code>location</code> 的定义：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>因为没有配置  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 指令，所以在访问这个接口时，Nginx 会自动计算出一个缺省的“文档根目录”。该缺省值是取所谓的“配置前缀”（configure prefix）路径下的 <code>html/</code> 子目录。举一个例子，假设“配置前缀”是 <code>/foo/bar/</code>，则缺省的“文档根目录”便是 <code>/foo/bar/html/</code>.
+</p>
+<p>那么“配置前缀”是由什么来决定的呢？默认情况下，就是 Nginx 安装时的根目录（或者说 Nginx 构造时传递给 <code>./configure</code> 脚本的 <code>--prefix</code> 选项的路径值）。如果 Nginx 安装到了 <code>/usr/local/nginx/</code> 下，则“配置前缀”便是 <code>/usr/local/nginx/</code>，同时默认的“文档根目录”便是 <code>/usr/local/nginx/html/</code>. 不过，我们也可以在启动 Nginx 的时候，通过 <code>--prefix</code> 命令行选项临时指定自己的“配置前缀”路径。假设我们启动 Nginx 时使用的命令是
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;nginx&nbsp;-p&nbsp;/home/agentzh/test/<br/>
+</code><p>则对于该服务器实例，其“配置前缀”便是 <code>/home/agentzh/test/</code>，而默认的“文档根目录”便是 <code>/home/agentzh/test/html/</code>. “配置前缀”不仅会决定默认的“文档根目录”，还决定着 Nginx 配置文件中许多相对路径值如何解释为绝对路径，后面我们还会看到许多需要引用到“配置前缀”的例子。
+</p>
+<p>获取当前“文档根目录”的路径有一个非常简便的方法，那就是请求一个肯定不存在的文件所对应的资源名，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/blah-blah.txt'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;html&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;head&gt;&lt;title&gt;404&nbsp;Not&nbsp;Found&lt;/title&gt;&lt;/head&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;body&nbsp;bgcolor=&quot;white&quot;&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;center&gt;&lt;h1&gt;404&nbsp;Not&nbsp;Found&lt;/h1&gt;&lt;/center&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/body&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/html&gt;<br/>
+</code><p>我们会很自然地得到 <code>404</code> 错误页。此时再看 Nginx 错误日志文件，应该会看到类似下面这一行错误消息：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[error]&nbsp;9364#0:&nbsp;*1&nbsp;open()&nbsp;&quot;/home/agentzh/test/html/blah-blah.txt&quot;&nbsp;failed&nbsp;(2:&nbsp;No&nbsp;such&nbsp;file&nbsp;or&nbsp;directory)<br/>
+</code><p>这条错误消息是 <code>ngx_static</code> 模块打印出来的，因为它并不能在文件系统的对应路径上找到名为 <code>blah-blah.txt</code> 的文件。因为这条错误信息中包含有 <code>ngx_static</code> 试图打开的文件的绝对路径，所以从这个路径不难看出，当前的“文档根目录”是 <code>/home/agentzh/test/html/</code>.
+</p>
+<p>很多初学者会想当然地把 <code>404</code> 错误理解为某个 <code>location</code> 不存在，其实上面这个例子表明，即使 <code>location</code> 存在并成功匹配，也是可能返回 <code>404</code> 错误页的。因为决定着 <code>404</code> 错误页的是抽象的“资源”是否存在，而非某个具体的 <code>location</code> 是否存在。
+</p>
+<p>初学者常犯的一个错误是忘记配置 <code>content</code> 阶段的模块指令，而他们自己其实并不期望使用 <code>content</code> 阶段缺省运行的静态资源服务，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/auth&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;access_by_lua&nbsp;'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;--&nbsp;a&nbsp;lot&nbsp;of&nbsp;Lua&nbsp;code&nbsp;omitted&nbsp;here...<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;';<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>显然，这个 <code>/auth</code> 接口只定义了 <code>access</code> 阶段的配置指令，即  <a href="http://wiki.nginx.org/HttpLuaModule#access_by_lua" target="_blank">access_by_lua</a>，并未定义任何 <code>content</code> 阶段的配置指令。于是当我们请求 <code>/auth</code> 接口时，在 <code>access</code> 阶段的 Lua 代码会如期执行，然后 <code>content</code> 阶段的那些静态文件服务会紧接着自动发生作用，直至 <code>ngx_static</code> 模块去文件系统上找名为 <code>auth</code> 的文件。而经常地，<code>404</code> 错误页会抛出，除非运气太好，在对应路径上确实存在一个叫做 <code>auth</code> 的文件。所以，一条经验是，当遇到意外的 <code>404</code> 错误并且又不涉及静态文件服务时，应当首先检查是否在对应的 <code>location</code> 配置块中恰当地配置了 <code>content</code> 阶段的模块指令，例如  <a href="http://wiki.nginx.org/HttpLuaModule#content_by_lua" target="_blank">content_by_lua</a>、  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 以及  <a href="http://wiki.nginx.org/HttpProxyModule#proxy_pass" target="_blank">proxy_pass</a> 之类。当然，Nginx 的 <code>error.log</code> 文件一般总是会提供各种意外问题的答案，例如对于上面这个例子，我的 <code>error.log</code> 中有下面这条错误信息：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[error]&nbsp;9364#0:&nbsp;*1&nbsp;open()&nbsp;&quot;/home/agentzh/test/html/auth&quot;&nbsp;failed&nbsp;(2:&nbsp;No&nbsp;such&nbsp;file&nbsp;or&nbsp;directory)<br/>
+</code>

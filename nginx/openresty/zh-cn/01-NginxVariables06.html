@@ -1,0 +1,123 @@
+    <h3 id="01-NginxVariables06">Nginx 变量漫谈（六）</h3>
+<p>Nginx 内建变量用在“子请求”的上下文中时，其行为也会变得有些微妙。
+</p>
+<p>前面在 <a href="#01-NginxVariables03">（三）</a> 中我们已经知道，许多内建变量都不是简单的“存放值的容器”，它们一般会通过注册“存取处理程序”来表现得与众不同，而它们即使有存放值的容器，也只是用于缓存“存取处理程序”的计算结果。我们之前讨论过的  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 变量正是通过它的“取处理程序”来返回当前请求的 URL 参数串。因为当前请求也可以是“子请求”，所以在“子请求”中读取  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a>，其“取处理程序”会很自然地返回当前“子请求”的参数串。我们来看这样的一个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;args:&nbsp;$args&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_location&nbsp;/sub&nbsp;&quot;a=1&amp;b=2&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;args:&nbsp;$args&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里在 <code>/main</code> 接口中，先用  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令输出当前请求的  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 变量的值，接着再用  <a href="http://wiki.nginx.org/HttpEchoModule#echo_location" target="_blank">echo_location</a> 指令发起子请求 <code>/sub</code>. 这里值得注意的是，我们在  <a href="http://wiki.nginx.org/HttpEchoModule#echo_location" target="_blank">echo_location</a> 语句中除了通过第一个参数指定“子请求”的 URI 之外，还提供了第二个参数，用以指定该“子请求”的 URL 参数串（即 <code>a=1&b=2</code>）。最后我们定义了 <code>/sub</code> 接口，在里面输出了一下  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值。请求 <code>/main</code> 接口的结果如下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/main?c=3'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;args:&nbsp;c=3<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sub&nbsp;args:&nbsp;a=1&amp;b=2<br/>
+</code><p>显然，当  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 用在“主请求” <code>/main</code> 中时，输出的就是“主请求”的 URL 参数串，<code>c=3</code>；而当用在“子请求” <code>/sub</code> 中时，输出的则是“子请求”的参数串，<code>a=1&b=2</code>。这种行为正符合我们的直觉。
+</p>
+<p>与  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 类似，内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 用在“子请求”中时，其“取处理程序”也会正确返回当前“子请求”解析过的 URI:
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;uri:&nbsp;$uri&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_location&nbsp;/sub;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;uri:&nbsp;$uri&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>请求 <code>/main</code> 的结果是
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/main'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;uri:&nbsp;/main<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sub&nbsp;uri:&nbsp;/sub<br/>
+</code><p>这依然是我们所期望的。
+</p>
+<p>但不幸的是，并非所有的内建变量都作用于当前请求。少数内建变量只作用于“主请求”，比如由标准模块 <a href="http://nginx.org/en/docs/http/ngx_http_core_module.html" target="_blank">ngx_http_core</a> 提供的内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a>.
+</p>
+<p>变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 在读取时，总是会得到“主请求”的请求方法，比如 <code>GET</code>、<code>POST</code> 之类。我们来测试一下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;method:&nbsp;$request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_location&nbsp;/sub;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;method:&nbsp;$request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>在这个例子里，<code>/main</code> 和 <code>/sub</code> 接口都会分别输出  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 的值。同时，我们在 <code>/main</code> 接口里利用  <a href="http://wiki.nginx.org/HttpEchoModule#echo_location" target="_blank">echo_location</a> 指令发起一个到 <code>/sub</code> 接口的 <code>GET</code> “子请求”。我们现在利用 <code>curl</code> 命令行工具来发起一个到 <code>/main</code> 接口的 <code>POST</code> 请求：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;--data&nbsp;hello&nbsp;'http://localhost:8080/main'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;method:&nbsp;POST<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sub&nbsp;method:&nbsp;POST<br/>
+</code><p>这里我们利用 <code>curl</code> 程序的 <code>--data</code> 选项，指定 <code>hello</code> 作为我们的请求体数据，同时 <code>--data</code> 选项会自动让发送的请求使用 <code>POST</code> 请求方法。测试结果证明了我们先前的预言， <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 变量即使在 <code>GET</code> “子请求” <code>/sub</code> 中使用，得到的值依然是“主请求” <code>/main</code> 的请求方法，<code>POST</code>.
+</p>
+<p>有的读者可能觉得我们在这里下的结论有些草率，因为上例是先在“主请求”里读取（并输出） <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 变量，然后才发“子请求”的，所以这些读者可能认为这并不能排除  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 在进入子请求之前就已经把第一次读到的值给缓存住，从而影响到后续子请求中的输出结果。不过，这样的顾虑是多余的，因为我们前面在 <a href="#01-NginxVariables05">（五）</a> 中也特别提到过，缓存所依赖的变量的值容器，是与当前请求绑定的，而由  <a href="http://wiki.nginx.org/HttpEchoModule" target="_blank">ngx_echo</a> 模块发起的“子请求”都禁用了父子请求之间的变量共享，所以在上例中， <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 内建变量即使真的使用了值容器作为缓存（事实上它也没有），它也不可能影响到 <code>/sub</code> 子请求。
+</p>
+<p>为了进一步消除这部分读者的疑虑，我们不妨稍微修改一下刚才那个例子，将 <code>/main</code> 接口输出  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 变量的时间推迟到“子请求”执行完毕之后：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_location&nbsp;/sub;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;method:&nbsp;$request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;method:&nbsp;$request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>让我们重新测试一下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;--data&nbsp;hello&nbsp;'http://localhost:8080/main'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sub&nbsp;method:&nbsp;POST<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;method:&nbsp;POST<br/>
+</code><p>可以看到，再次以 <code>POST</code> 方法请求 <code>/main</code> 接口的结果与原先那个例子完全一致，除了父子请求的输出顺序颠倒了过来（因为我们在本例中交换了 <code>/main</code> 接口中那两条输出配置指令的先后次序）。
+</p>
+<p>由此可见，我们并不能通过标准的  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a> 变量取得“子请求”的请求方法。为了达到我们最初的目的，我们需要求助于第三方模块  <a href="http://wiki.nginx.org/HttpEchoModule" target="_blank">ngx_echo</a> 提供的内建变量  <a href="http://wiki.nginx.org/HttpEchoModule#.24echo_request_method" target="_blank">$echo_request_method</a>：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;method:&nbsp;$echo_request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo_location&nbsp;/sub;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;method:&nbsp;$echo_request_method&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>此时的输出终于是我们想要的了：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;--data&nbsp;hello&nbsp;'http://localhost:8080/main'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;method:&nbsp;POST<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sub&nbsp;method:&nbsp;GET<br/>
+</code><p>我们看到，父子请求分别输出了它们各自不同的请求方法，<code>POST</code> 和 <code>GET</code>.
+</p>
+<p>类似  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_method" target="_blank">$request_method</a>，内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24request_uri" target="_blank">$request_uri</a> 一般也返回的是“主请求”未经解析过的 URL，毕竟“子请求”都是在 Nginx 内部发起的，并不存在所谓的“未解析的”原始形式。
+</p>
+<p>如果真如前面那部分读者所担心的，内建变量的值缓存在共享变量的父子请求之间起了作用，这无疑是灾难性的。我们前面在 <a href="#01-NginxVariables05">（五）</a> 中已经看到 <a href="http://mdounin.ru/hg/ngx_http_auth_request_module/" target="_blank">ngx_auth_request</a> 模块发起的“子请求”是与其“父请求”共享一套变量的。下面是一个这样的可怕例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;map&nbsp;$uri&nbsp;$tag&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/main&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;/sub&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;2;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/main&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;auth_request&nbsp;/sub;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;main&nbsp;tag:&nbsp;$tag&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/sub&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;sub&nbsp;tag:&nbsp;$tag&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里我们使用久违了的  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令来把内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 的值映射到用户变量 <code>$tag</code> 上。当  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 的值为 <code>/main</code> 时，则赋予 <code>$tag</code> 值 1，当  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 取值 <code>/sub</code> 时，则赋予 <code>$tag</code> 值 2，其他情况都赋 <code>0</code>. 接着，我们在 <code>/main</code> 接口中先用 <a href="http://mdounin.ru/hg/ngx_http_auth_request_module/" target="_blank">ngx_auth_request</a> 模块的 <code>auth_request</code> 指令发起到 <code>/sub</code> 接口的子请求，然后再输出变量 <code>$tag</code> 的值。而在 <code>/sub</code> 接口中，我们直接输出变量 <code>$tag</code>. 猜猜看，如果我们访问接口 <code>/main</code>，将会得到什么样的输出呢？
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/main'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;main&nbsp;tag:&nbsp;2<br/>
+</code><p>咦？我们不是分明把 <code>/main</code> 这个值映射到 <code>1</code> 上的么？为什么实际输出的是 <code>/sub</code> 映射的结果 <code>2</code> 呢？
+</p>
+<p>其实道理很简单，因为我们的 <code>$tag</code> 变量在“子请求” <code>/sub</code> 中首先被读取，于是在那里计算出了值 <code>2</code>（因为  <a href="http://wiki.nginx.org/HttpCoreModule#.24uri" target="_blank">$uri</a> 在那里取值 <code>/sub</code>，而根据  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 映射规则，<code>$tag</code> 应当取值 <code>2</code>），从此就被 <code>$tag</code> 的值容器给缓存住了。而 <code>auth_request</code> 发起的“子请求”又是与“父请求”共享一套变量的，于是当 Nginx 的执行流回到“父请求”输出 <code>$tag</code> 变量的值时，Nginx 就直接返回缓存住的结果 <code>2</code> 了。这样的结果确实太意外了。
+</p>
+<p>从这个例子我们再次看到，父子请求间的变量共享，实在不是一个好主意。</p>

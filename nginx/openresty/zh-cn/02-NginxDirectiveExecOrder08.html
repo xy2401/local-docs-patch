@@ -1,0 +1,74 @@
+    <h3 id="02-NginxDirectiveExecOrder08">Nginx 配置指令的执行顺序（八）</h3>
+<p>前面我们详细讨论了 <code>rewrite</code>、<code>access</code> 和 <code>content</code> 这三个最为常见的 Nginx 请求处理阶段，在此过程中，也顺便介绍了运行在这三个阶段的众多 Nginx 模块及其配置指令。同时可以看到，请求处理阶段的划分直接影响到了配置指令的执行顺序，熟悉这些阶段对于正确配置不同的 Nginx 模块并实现它们彼此之间的协同工作是非常必要的。所以接下来我们接着讨论余下的那些阶段。
+</p>
+<p>前面在 <a href="#02-NginxDirectiveExecOrder01">（一）</a> 中提到，Nginx 处理请求的过程一共划分为 11 个阶段，按照执行顺序依次是 <code>post-read</code>、<code>server-rewrite</code>、<code>find-config</code>、<code>rewrite</code>、<code>post-rewrite</code>、<code>preaccess</code>、<code>access</code>、<code>post-access</code>、<code>try-files</code>、<code>content</code> 以及 <code>log</code>.
+</p>
+<p>最先执行的 <code>post-read</code> 阶段在 Nginx 读取并解析完请求头（request headers）之后就立即开始运行。这个阶段像前面介绍过的 <code>rewrite</code> 阶段那样支持 Nginx 模块注册处理程序。比如标准模块  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 就在 <code>post-read</code> 阶段注册了处理程序，它的功能是迫使 Nginx 认为当前请求的来源地址是指定的某一个请求头的值。下面这个例子就使用了  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 模块提供的  <a href="http://wiki.nginx.org/HttpRealIpModule#set_real_ip_from" target="_blank">set_real_ip_from</a> 和  <a href="http://wiki.nginx.org/HttpRealIpModule#real_ip_header" target="_blank">real_ip_header</a> 这两条配置指令：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_real_ip_from&nbsp;127.0.0.1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;real_ip_header&nbsp;&nbsp;&nbsp;X-My-IP;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$addr&nbsp;$remote_addr;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;from:&nbsp;$addr&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里的配置是让 Nginx 把那些来自 <code>127.0.0.1</code> 的所有请求的来源地址，都改写为请求头 <code>X-My-IP</code> 所指定的值。同时该例使用了标准内建变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24remote_addr" target="_blank">$remote_addr</a> 来输出当前请求的来源地址，以确认是否被成功改写。
+</p>
+<p>首先在本地请求一下这个 <code>/test</code> 接口：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;-H&nbsp;'X-My-IP:&nbsp;1.2.3.4'&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;from:&nbsp;1.2.3.4<br/>
+</code><p>这里使用了 curl 工具的 <code>-H</code> 选项指定了额外的 HTTP 请求头 <code>X-My-IP: 1.2.3.4</code>. 从输出可以看到， <a href="http://wiki.nginx.org/HttpCoreModule#.24remote_addr" target="_blank">$remote_addr</a> 变量的值确实在 <code>rewrite</code> 阶段就已经成为了 <code>X-My-IP</code> 请求头中指定的值，即 <code>1.2.3.4</code>. 那么 Nginx 究竟是在什么时候改写了当前请求的来源地址呢？答案是：在 <code>post-read</code> 阶段。由于 <code>rewrite</code> 阶段的运行远在 <code>post-read</code> 阶段之后，所以当在 <code>location</code> 配置块中通过  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 配置指令读取  <a href="http://wiki.nginx.org/HttpCoreModule#.24remote_addr" target="_blank">$remote_addr</a> 内建变量时，读出的来源地址已经是经过 <code>post-read</code> 阶段篡改过的。
+</p>
+<p>如果在请求上例中的 <code>/test</code> 接口时没有指定 <code>X-My-IP</code> 请求头，或者提供的 <code>X-My-IP</code> 请求头的值不是合法的 IP 地址，那么 Nginx 就不会对来源地址进行改写，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;from:&nbsp;127.0.0.1<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;-H&nbsp;'X-My-IP:&nbsp;abc'&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;from:&nbsp;127.0.0.1<br/>
+</code><p>如果从另一台机器访问这个 <code>/test</code> 接口，那么即使指定了合法的 <code>X-My-IP</code> 请求头，也不会触发 Nginx 对来源地址进行改写。这是因为上例已经使用  <a href="http://wiki.nginx.org/HttpRealIpModule#set_real_ip_from" target="_blank">set_real_ip_from</a> 指令规定了来源地址的改写操作只对那些来自 <code>127.0.0.1</code> 的请求生效。这种过滤机制可以避免来自其他不受信任的地址的恶意欺骗。当然，也可以通过  <a href="http://wiki.nginx.org/HttpRealIpModule#set_real_ip_from" target="_blank">set_real_ip_from</a> 指令指定一个 IP 网段（利用 <a href="#02-NginxDirectiveExecOrder03">（三）</a> 中介绍过的“CIDR 记法”）。此外，同时配置多个  <a href="http://wiki.nginx.org/HttpRealIpModule#set_real_ip_from" target="_blank">set_real_ip_from</a> 语句也是允许的，这样可以指定多个受信任的来源地址或地址段。下面是一个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set_real_ip_from&nbsp;10.32.10.5;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;set_real_ip_from&nbsp;127.0.0.0/24;<br/>
+</code><p>有的读者可能会问， <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 模块究竟有什么实际用途呢？为什么我们需要去改写请求的来源地址呢？答案是：当 Nginx 处理的请求经过了某个 HTTP 代理服务器的转发时，这个模块就变得特别有用。当原始的用户请求经过转发之后，Nginx 接收到的请求的来源地址无一例外地变成了该代理服务器的 IP 地址，于是 Nginx 以及 Nginx 背后的应用就无法知道原始请求的真实来源。所以，一般我们会在 Nginx 之前的代理服务器中把请求的原始来源地址编码进某个特殊的 HTTP 请求头中（例如上例中的 <code>X-My-IP</code> 请求头），然后再在 Nginx 一侧把这个请求头中编码的地址恢复出来。这样 Nginx 中的后续处理阶段（包括 Nginx 背后的各种后端应用）就会认为这些请求直接来自那些原始的地址，代理服务器就仿佛不存在一样。正是因为这个需求，所以  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 模块才需要在第一个处理阶段，即 <code>post-read</code> 阶段，注册处理程序，以便尽可能早地改写请求的来源。
+</p>
+<p><code>post-read</code> 阶段之后便是 <code>server-rewrite</code> 阶段。我们曾在 <a href="#02-NginxDirectiveExecOrder02">（二）</a> 中简单提到，当  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的配置指令直接书写在 <code>server</code> 配置块中时，基本上都是运行在 <code>server-rewrite</code> 阶段。下面就来看这样的一个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$b&nbsp;&quot;$a,&nbsp;world&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$b;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;hello;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里，配置语句 <code>set $a hello</code> 直接写在了 <code>server</code> 配置块中，因此它就运行在 <code>server-rewrite</code> 阶段。而 <code>server-rewrite</code> 阶段要早于 <code>rewrite</code> 阶段运行，因此写在 <code>location</code> 配置块中的语句 <code>set $b "$a, world"</code> 便晚于外面的 <code>set $a hello</code> 语句运行。该例的测试结果证明了这一点：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;hello,&nbsp;world<br/>
+</code><p>由于 <code>server-rewrite</code> 阶段位于 <code>post-read</code> 阶段之后，所以 <code>server</code> 配置块中的  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令也就总是运行在  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 模块改写请求的来源地址之后。来看下面这个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$addr&nbsp;$remote_addr;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_real_ip_from&nbsp;127.0.0.1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;real_ip_header&nbsp;&nbsp;&nbsp;X-Real-IP;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;from:&nbsp;$addr&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>请求 <code>/test</code> 接口的结果如下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;-H&nbsp;'X-Real-IP:&nbsp;1.2.3.4'&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;from:&nbsp;1.2.3.4<br/>
+</code><p>在这个例子中，虽然  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令写在了  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 的配置指令之前，但仍然晚于  <a href="http://wiki.nginx.org/HttpRealIpModule" target="_blank">ngx_realip</a> 模块执行。所以 <code>$addr</code> 变量在 <code>server-rewrite</code> 阶段被  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令赋值时，从  <a href="http://wiki.nginx.org/HttpCoreModule#.24remote_addr" target="_blank">$remote_addr</a> 变量读出的来源地址已经是经过改写过的了。</p>

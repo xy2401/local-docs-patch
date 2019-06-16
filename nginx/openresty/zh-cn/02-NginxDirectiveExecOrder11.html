@@ -1,0 +1,78 @@
+    <h3 id="02-NginxDirectiveExecOrder11">Nginx 配置指令的执行顺序（十一）</h3>
+<p>紧跟在 <code>post-access</code> 阶段之后的是 <code>try-files</code> 阶段。这个阶段专门用于实现标准配置指令  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 的功能，并不支持 Nginx 模块注册处理程序。由于  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令在许多 FastCGI 应用的配置中都有用到，所以我们不妨在这里简单介绍一下。
+</p>
+<p> <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令接受两个以上任意数量的参数，每个参数都指定了一个 URI. 这里假设配置了 <code>N</code> 个参数，则 Nginx 会在 <code>try-files</code> 阶段，依次把前 <code>N-1</code> 个参数映射为文件系统上的对象（文件或者目录），然后检查这些对象是否存在。一旦 Nginx 发现某个文件系统对象存在，就会在 <code>try-files</code> 阶段把当前请求的 URI 改写为该对象所对应的参数 URI（但不会包含末尾的斜杠字符，也不会发生 “内部跳转”）。如果前 <code>N-1</code> 个参数所对应的文件系统对象都不存在，<code>try-files</code> 阶段就会立即发起“内部跳转”到最后一个参数（即第 <code>N</code> 个参数）所指定的 URI.
+</p>
+<p>前面在 <a href="#02-NginxDirectiveExecOrder06">（六）</a> 和 <a href="#02-NginxDirectiveExecOrder07">（七）</a> 中已经看到静态资源服务模块会把当前请求的 URI 映射到文件系统，通过  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 配置指令所指定的“文档根目录”进行映射。例如，当“文档根目录”是 <code>/var/www/</code> 的时候，请求 URI <code>/foo/bar</code> 会被映射为文件 <code>/var/www/foo/bar</code>，而请求 URI <code>/foo/baz/</code> 则会被映射为目录 <code>/var/www/foo/baz/</code>. 注意这里是如何通过 URI 末尾的斜杠字符是否存在来区分“目录”和“文件”的。我们正在讨论的  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 配置指令使用同样的规则来完成其各个参数 URI 到文件系统对象的映射。
+</p>
+<p>不妨来看下面这个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;root&nbsp;/var/www/;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;try_files&nbsp;/foo&nbsp;/bar/&nbsp;/baz;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;uri:&nbsp;$uri&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/foo&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;foo;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/bar/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;bar;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/baz&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;baz;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里通过  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 指令把“文档根目录”配置为 <code>/var/www/</code>，如果你系统中的 <code>/var/www/</code> 路径下存放有重要数据，则可以把它替换为其他任意路径，但此路径对运行 Nginx worker 进程的系统帐号至少有可读权限。我们在 <code>location /test</code> 中使用了  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 配置指令，并提供了三个参数，<code>/foo</code>、<code>/bar/</code> 和 <code>/baz</code>. 根据前面对  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令的介绍，我们可以知道，它会在 <code>try-files</code> 阶段依次检查前两个参数 <code>/foo</code> 和 <code>/bar/</code> 所对应的文件系统对象是否存在。
+</p>
+<p>不妨先来做一组实验。假设现在 <code>/var/www/</code> 路径下是空的，则第一个参数 <code>/foo</code> 映射成的文件 <code>/var/www/foo</code> 是不存在的；同样，对于第二个参数 <code>/bar/</code> 所映射成的目录 <code>/var/www/bar/</code> 也是不存在的。于是此时 Nginx 会在 <code>try-files</code> 阶段发起到最后一个参数所指定的 URI（即 <code>/baz</code>）的“内部跳转”。实际的请求结果证实了这一点：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;baz<br/>
+</code><p>显然，该请求最终和 <code>location /baz</code> 绑定在一起，执行了输出 <code>baz</code> 字符串的工作。上例中定义的 <code>location /foo</code> 和 <code>location /bar/</code> 完全不会参与这里的运行过程，因为对于  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 的前 <code>N-1</code> 个参数，Nginx 只会检查文件系统，而不会去执行 URI 与 <code>location</code> 之间的匹配。
+</p>
+<p>对于上面这个请求，Nginx 会产生类似下面这样的“调试日志”：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;grep&nbsp;trying&nbsp;logs/error.log<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;3869#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;file:&nbsp;&quot;/foo&quot;&nbsp;&quot;/var/www/foo&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;3869#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;dir:&nbsp;&quot;/bar&quot;&nbsp;&quot;/var/www/bar&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;3869#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;file:&nbsp;&quot;/baz&quot;&nbsp;&quot;/var/www/baz&quot;<br/>
+</code><p>通过这些信息可以清楚地看到 <code>try-files</code> 阶段发生的事情：Nginx 依次检查了文件 <code>/var/www/foo</code> 和目录 <code>/var/www/bar</code>，末了又处理了最后一个参数 <code>/baz</code>. 这里最后一条“调试信息”容易产生误解，会让人误以为 Nginx 也把最后一个参数 <code>/baz</code> 给映射成了文件系统对象进行检查，事实并非如此。当  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令处理到它的最后一个参数时，总是直接执行“内部跳转”，而不论其对应的文件系统对象是否存在。
+</p>
+<p>接下来再做一组实验：在 <code>/var/www/</code> 下创建一个名为 <code>foo</code> 的文件，其内容为 <code>hello world</code>（注意你需要有 <code>/var/www/</code> 目录下的写权限）：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;echo&nbsp;'hello&nbsp;world'&nbsp;&gt;&nbsp;/var/www/foo<br/>
+</code><p>然后再请求 <code>/test</code> 接口：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;uri:&nbsp;/foo<br/>
+</code><p>这里发生了什么？我们来看， <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令的第一个参数 <code>/foo</code> 可以映射为文件 <code>/var/www/foo</code>，而 Nginx 在 <code>try-files</code> 阶段发现此文件确实存在，于是立即把当前请求的 URI 改写为这个参数的值，即 <code>/foo</code>，并且不再继续检查后面的参数，而直接运行后面的请求处理阶段。
+</p>
+<p>上面这个请求在 <code>try-files</code> 阶段所产生的“调试日志”如下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;grep&nbsp;trying&nbsp;logs/error.log<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;4132#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;file:&nbsp;&quot;/foo&quot;&nbsp;&quot;/var/www/foo&quot;<br/>
+</code><p>显然，在 <code>try-files</code> 阶段，Nginx 确实只检查和处理了 <code>/foo</code> 这一个参数，而后面的参数都被“短路”掉了。
+</p>
+<p>类似地，假设我们删除刚才创建的 <code>/var/www/foo</code> 文件，而在 <code>/var/www/</code> 下创建一个名为 <code>bar</code> 的子目录：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;mkdir&nbsp;/var/www/bar<br/>
+</code><p>则请求 <code>/test</code> 的结果也是类似的：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;uri:&nbsp;/bar<br/>
+</code><p>在这种情况下，Nginx 在 <code>try-files</code> 阶段发现第一个参数 <code>/foo</code> 对应的文件不存在，就会转向检查第二个参数对应的文件系统对象（在这里便是目录 <code>/var/www/bar/</code>）。由于此目录存在，Nginx 就会把当前请求的 URI 改写为第二个参数的值，即 <code>/bar</code>（注意，原始参数值是 <code>/bar/</code>，但  <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 会自动去除末尾的斜杠字符）。
+</p>
+<p>这一组实验所产生的“调试日志”如下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;grep&nbsp;trying&nbsp;logs/error.log<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;4223#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;file:&nbsp;&quot;/foo&quot;&nbsp;&quot;/var/www/foo&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;4223#0:&nbsp;*1&nbsp;trying&nbsp;to&nbsp;use&nbsp;dir:&nbsp;&quot;/bar&quot;&nbsp;&quot;/var/www/bar&quot;<br/>
+</code><p>我们看到， <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令在这里只检查和处理了它的前两个参数。
+</p>
+<p>通过前面这几组实验不难看到， <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令本质上只是有条件地改写当前请求的 URI，而这里说的“条件”其实就是文件系统上的对象是否存在。当“条件”都不满足时，它就会无条件地发起一个指定的“内部跳转”。当然，除了无条件地发起“内部跳转”之外， <a href="http://wiki.nginx.org/HttpCoreModule#try_files" target="_blank">try_files</a> 指令还支持直接返回指定状态码的 HTTP 错误页，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;try_files&nbsp;/foo&nbsp;/bar/&nbsp;=404;<br/>
+</code><p>这行配置是说，当 <code>/foo</code> 和 <code>/bar/</code> 参数所对应的文件系统对象都不存在时，就直接返回 <code>404 Not Found</code> 错误页。注意这里它是如何使用等号字符前缀来标识 HTTP 状态码的。</p>

@@ -1,0 +1,75 @@
+    <h3 id="02-NginxDirectiveExecOrder03">Nginx 配置指令的执行顺序（三）</h3>
+<p>如前文所述，除非像  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块那样使用特殊技术，其他模块的配置指令即使是在 <code>rewrite</code> 阶段运行，也不能和  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的指令混合使用。不妨来看几个这样的例子。
+</p>
+<p>第三方模块  <a href="http://wiki.nginx.org/HttpHeadersMoreModule" target="_blank">ngx_headers_more</a> 提供了一系列配置指令，用于操纵当前请求的请求头和响应头。其中有一条名叫  <a href="http://wiki.nginx.org/HttpHeadersMoreModule#more_set_input_headers" target="_blank">more_set_input_headers</a> 的指令可以在 <code>rewrite</code> 阶段改写指定的请求头（或者在请求头不存在时自动创建）。这条指令总是运行在 <code>rewrite</code> 阶段的末尾，该指令的文档中有这么一行标记：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;phase:&nbsp;rewrite&nbsp;tail<br/>
+</code><p>其中的 <code>rewrite tail</code> 的意思就是 <code>rewrite</code> 阶段的末尾。
+</p>
+<p>既然运行在 <code>rewrite</code> 阶段的末尾，那么也就总是会运行在 <code>ngx_rewrite</code> 模块的指令之后，即使我们在配置文件中把它写在前面，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$value&nbsp;dog;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;more_set_input_headers&nbsp;&quot;X-Species:&nbsp;$value&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$value&nbsp;cat;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;X-Species:&nbsp;$http_x_species&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;}<br/>
+</code><p>这个例子用到的  <a href="http://wiki.nginx.org/HttpCoreModule#.24http_HEADER" target="_blank">$http_XXX</a> 内建变量在读取时会返回当前请求中名为 <code>XXX</code> 的请求头，我们在 <a href="#01-NginxVariables02">Nginx 变量漫谈（二）</a> 中曾经简单提过它。需要注意的是， <a href="http://wiki.nginx.org/HttpCoreModule#.24http_HEADER" target="_blank">$http_XXX</a> 变量在匹配请求头时会自动对请求头的名字进行归一化，即将名字的大写字母转换为小写字母，同时把间隔符（<code>-</code>）替换为下划线（<code>_</code>），所以变量名 <code>$http_x_species</code> 才得以成功匹配  <a href="http://wiki.nginx.org/HttpHeadersMoreModule#more_set_input_headers" target="_blank">more_set_input_headers</a> 语句中设置的请求头 <code>X-Species</code>.
+</p>
+<p>此例书写的指令顺序会误导我们认为 <code>/test</code> 接口输出的 <code>X-Species</code> 头的值是 <code>dog</code>，然而实际的结果却并非如此：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;X-Species:&nbsp;cat<br/>
+</code><p>显然，写在  <a href="http://wiki.nginx.org/HttpHeadersMoreModule#more_set_input_headers" target="_blank">more_set_input_headers</a> 指令之后的 <code>set $value cat</code> 语句却先执行了。
+</p>
+<p>上面这个例子证明了即使运行在同一个请求处理阶段，分属不同模块的配置指令也可能会分开独立运行（除非像  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 等模块那样针对  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块提供特殊支持）。换句话说，在单个请求处理阶段内部，一般也会以 Nginx 模块为单位进一步地划分出内部子阶段。
+</p>
+<p>第三方模块  <a href="http://wiki.nginx.org/HttpLuaModule" target="_blank">ngx_lua</a> 提供的  <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 配置指令也和  <a href="http://wiki.nginx.org/HttpHeadersMoreModule#more_set_input_headers" target="_blank">more_set_input_headers</a> 一样运行在 <code>rewrite</code> 阶段的末尾。我们来验证一下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;rewrite_by_lua&nbsp;&quot;ngx.var.a&nbsp;=&nbsp;ngx.var.a&nbsp;+&nbsp;1&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;}<br/>
+</code><p>这里我们在  <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 语句内联的 Lua 代码中对 Nginx 变量 <code>$a</code> 进行了自增计算。从该例的指令书写顺序上看，我们或许会期望输出是 <code>56</code>，可是因为  <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 会在所有的  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句之后执行，所以结果是 <code>57</code>：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;57<br/>
+</code><p>显然， <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 指令的行为不同于我们前面在 <a href="#02-NginxDirectiveExecOrder02">（二）</a> 中介绍过的  <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令。
+</p>
+<p>有的读者可能要问，既然  <a href="http://wiki.nginx.org/HttpHeadersMoreModule#more_set_input_headers" target="_blank">more_set_input_headers</a> 和  <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 指令都运行在 <code>rewrite</code> 阶段的末尾，那么它们之间的先后顺序又是怎样的呢？答案是：不一定。我们应当避免写出依赖它们二者间顺序的配置。
+</p>
+<p>Nginx 的 <code>rewrite</code> 阶段是一个比较早的请求处理阶段，这个阶段的配置指令一般用来对当前请求进行各种修改（比如对 URI 和 URL 参数进行改写），或者创建并初始化一系列后续处理阶段可能需要的 Nginx 变量。当然，也不能阻止一些用户在 <code>rewrite</code> 阶段做一系列更复杂的事情，比如读取请求体，或者访问数据库等远方服务，毕竟有  <a href="http://wiki.nginx.org/HttpLuaModule#rewrite_by_lua" target="_blank">rewrite_by_lua</a> 这样的指令可以嵌入任意复杂的 Lua 代码。
+</p>
+<p>在 <code>rewrite</code> 阶段之后，有一个名叫 <code>access</code> 的请求处理阶段。<a href="#01-NginxVariables05">Nginx 变量漫谈（五）</a> 中介绍过的第三方模块 <a href="http://mdounin.ru/hg/ngx_http_auth_request_module/" target="_blank">ngx_auth_request</a> 的指令就运行在 <code>access</code> 阶段。在 <code>access</code> 阶段运行的配置指令多是执行访问控制性质的任务，比如检查用户的访问权限，检查用户的来源 IP 地址是否合法，诸如此类。
+</p>
+<p>例如，标准模块  <a href="http://wiki.nginx.org/HttpAccessModule" target="_blank">ngx_access</a> 提供的  <a href="http://wiki.nginx.org/HttpAccessModule#allow" target="_blank">allow</a> 和  <a href="http://wiki.nginx.org/HttpAccessModule#deny" target="_blank">deny</a> 配置指令可用于控制哪些 IP 地址可以访问，哪些不可以：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/hello&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;allow&nbsp;127.0.0.1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;deny&nbsp;all;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;hello&nbsp;world&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这个 <code>/hello</code> 接口被配置为只允许从本机（IP 地址为保留的 <code>127.0.0.1</code>）访问，而从其他 IP 地址访问都会被拒（返回 <code>403</code> 错误页）。 <a href="http://wiki.nginx.org/HttpAccessModule" target="_blank">ngx_access</a> 模块自己的多条配置指令之间是按顺序执行的，直到遇到第一条满足条件的指令就不再执行后续的  <a href="http://wiki.nginx.org/HttpAccessModule#allow" target="_blank">allow</a> 和  <a href="http://wiki.nginx.org/HttpAccessModule#deny" target="_blank">deny</a> 指令。如果首先匹配的指令是  <a href="http://wiki.nginx.org/HttpAccessModule#allow" target="_blank">allow</a>，则会继续执行后续其他模块的指令或者跳到后续的处理阶段；而如果首先满足的是  <a href="http://wiki.nginx.org/HttpAccessModule#deny" target="_blank">deny</a> 则会立即中止当前整个请求的处理，并立即返回 <code>403</code> 错误页。所以看上面这个例子，如果是从本地访问的，则首先匹配 <code>allow 127.0.0.1</code> 这一条语句，于是 Nginx 就继续往下执行其他模块的指令以及后续的处理阶段；而如果是从其他机器访问，则首先匹配的则是 <code>deny all</code> 这一条语句，即拒绝所有地址，它会导致 <code>403</code> 错误页立即返回给客户端。
+</p>
+<p>我们来实测一下。从本机访问这个接口可以得到
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/hello'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;hello&nbsp;world<br/>
+</code><p>而从另一台机器访问这台机器（假设运行 Nginx 的机器地址是 <code>192.168.1.101</code>）提供的接口时则得到
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://192.168.1.101:8080/hello'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;html&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;head&gt;&lt;title&gt;403&nbsp;Forbidden&lt;/title&gt;&lt;/head&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;body&nbsp;bgcolor=&quot;white&quot;&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;center&gt;&lt;h1&gt;403&nbsp;Forbidden&lt;/h1&gt;&lt;/center&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/body&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/html&gt;<br/>
+</code><p>值得一提的是， <a href="http://wiki.nginx.org/HttpAccessModule" target="_blank">ngx_access</a> 模块还支持所谓的“CIDR 记法”来表示一个网段，例如 <code>169.200.179.4/24</code> 则表示路由前缀是 <code>169.200.179.0</code>（或者说子网掩码是 <code>255.255.255.0</code>）的网段。
+</p>
+<p>因为  <a href="http://wiki.nginx.org/HttpAccessModule" target="_blank">ngx_access</a> 模块的指令运行在 <code>access</code> 阶段，而 <code>access</code> 阶段又处于 <code>rewrite</code> 阶段之后，所以前面我们见到的所有那些在 <code>rewrite</code> 阶段运行的配置指令，都总是在  <a href="http://wiki.nginx.org/HttpAccessModule#allow" target="_blank">allow</a> 和  <a href="http://wiki.nginx.org/HttpAccessModule#deny" target="_blank">deny</a> 之前执行，而无论它们在配置文件中的书写顺序是怎样的。所以，为了避免阅读配置时的混乱，我们应该总是让指令的书写顺序和它们的实际执行顺序保持一致。</p>

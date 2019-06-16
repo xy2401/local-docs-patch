@@ -1,0 +1,86 @@
+    <h3 id="02-NginxDirectiveExecOrder02">Nginx 配置指令的执行顺序（二）</h3>
+<p>我们前面已经知道，当  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令用在 <code>location</code> 配置块中时，都是在当前请求的 <code>rewrite</code> 阶段运行的。事实上，在此上下文中， <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块中的几乎全部指令，都运行在 <code>rewrite</code> 阶段，包括 <a href="#01-NginxVariables02">Nginx 变量漫谈（二）</a> 中介绍过的  <a href="http://wiki.nginx.org/HttpRewriteModule#rewrite" target="_blank">rewrite</a> 指令。不过，值得一提的是，当这些指令使用在 <code>server</code> 配置块中时，则会运行在一个我们尚未提及的更早的处理阶段，<code>server-rewrite</code> 阶段。
+</p>
+<p><a href="#01-NginxVariables02">Nginx 变量漫谈（二）</a> 中介绍过的  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块的  <a href="http://wiki.nginx.org/HttpSetMiscModule#set_unescape_uri" target="_blank">set_unescape_uri</a> 指令同样也运行在 <code>rewrite</code> 阶段。特别地， <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块的指令还可以和  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 的指令混合在一起依次执行。我们来看这样的一个例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;&quot;hello%20world&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_unescape_uri&nbsp;$b&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$c&nbsp;&quot;$b!&quot;;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$c;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>访问这个接口可以得到：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;hello&nbsp;world!<br/>
+</code><p>我们看到， <a href="http://wiki.nginx.org/HttpSetMiscModule#set_unescape_uri" target="_blank">set_unescape_uri</a> 语句前后的  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句都按书写时的顺序一前一后地执行了。
+</p>
+<p>为了进一步确认这一点，我们不妨再检查一下 Nginx 的“调试日志”（如果你还不清楚如何开启“调试日志”的话，可以参考 <a href="#02-NginxDirectiveExecOrder01">（一）</a> 中的步骤）：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;grep&nbsp;-E&nbsp;'http&nbsp;script&nbsp;(value|copy|set)'&nbsp;t/servroot/logs/error.log<br/>
+</code><p>过滤出来的调试日志信息如下所示：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;hello%20world&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value&nbsp;(post&nbsp;filter):&nbsp;&quot;hello&nbsp;world&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$b<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;copy:&nbsp;&quot;!&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$c<br/>
+</code><p>开头的两行信息
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;hello%20world&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+</code><p>就对应我们的配置语句
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;&quot;hello%20world&quot;;<br/>
+</code><p>而接下来的两行
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value&nbsp;(post&nbsp;filter):&nbsp;&quot;hello&nbsp;world&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$b<br/>
+</code><p>则对应配置语句
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set_unescape_uri&nbsp;$b&nbsp;$a;<br/>
+</code><p>我们看到第一行信息与  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令略有区别，多了 <code>"(post filter)"</code> 这个标记，而且最后显示出 URI 解码操作确实如我们期望的那样工作了，即 <code>"hello%20world"</code> 在这里被成功解码为 <code>"hello world"</code>.
+</p>
+<p>而最后两行调试信息
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;copy:&nbsp;&quot;!&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;11167#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$c<br/>
+</code><p>则对应最后一条  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$c&nbsp;&quot;$b!&quot;;<br/>
+</code><p>注意，因为这条指令在为 <code>$c</code> 变量赋值时使用了“变量插值”功能，所以第一行调试信息是以 <code>http script copy</code> 起始的，后面则是拼接到最终取值的字符串常量 <code>"!"</code>.
+</p>
+<p>把这些调试信息联系起来看，我们不难发现，这些配置指令的实际执行顺序是：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;&quot;hello%20world&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;set_unescape_uri&nbsp;$b&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$c&nbsp;&quot;$b!&quot;;<br/>
+</code><p>这与它们在配置文件中的书写顺序完全一致。
+</p>
+<p>我们在 <a href="#01-NginxVariables07">Nginx 变量漫谈（七）</a> 中初识了第三方模块  <a href="http://wiki.nginx.org/HttpLuaModule" target="_blank">ngx_lua</a>，它提供的  <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 配置指令也和  <a href="http://wiki.nginx.org/HttpSetMiscModule" target="_blank">ngx_set_misc</a> 模块的指令一样，可以和  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的指令混合使用。 <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令支持通过一小段用户 Lua 代码来计算出一个结果，然后赋给指定的 Nginx 变量。和  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令相似， <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令也有自动创建不存在的 Nginx 变量的功能。
+</p>
+<p>下面我们就来看一个  <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令与  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令混合使用的例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$b&nbsp;56;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set_by_lua&nbsp;$c&nbsp;&quot;return&nbsp;ngx.var.a&nbsp;+&nbsp;ngx.var.b&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$equation&nbsp;&quot;$a&nbsp;+&nbsp;$b&nbsp;=&nbsp;$c&quot;;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$equation;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里我们先将 <code>$a</code> 和 <code>$b</code> 变量分别初始化为 <code>32</code> 和 <code>56</code>，然后利用  <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令内联一行我们自己指定的 Lua 代码，计算出 Nginx 变量 <code>$a</code> 和 <code>$b</code> 的“代数和”（sum），并赋给变量 <code>$c</code>，接着利用“变量插值”功能，把变量 <code>$a</code>、 <code>$b</code> 和 <code>$c</code> 的值拼接成一个字符串形式的等式，赋予变量 <code>$equation</code>，最后再用  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令输出 <code>$equation</code> 的值。
+</p>
+<p>这个例子值得注意的地方是：首先，我们在 Lua 代码中是通过  <a href="http://wiki.nginx.org/HttpLuaModule#ngx.var.VARIABLE" target="_blank">ngx.var.VARIABLE</a> 接口来读取 Nginx 变量 <code>$VARIABLE</code> 的；其次，因为 Nginx 变量的值只有字符串这一种类型，所以在 Lua 代码里读取 <code>ngx.var.a</code> 和 <code>ngx.var.b</code> 时得到的其实都是 Lua 字符串类型的值 <code>"32"</code> 和 <code>"56"</code>；接着，我们对两个字符串作加法运算会触发 Lua 对加数进行自动类型转换（Lua 会把两个加数先转换为数值类型再求和）；然后，我们在 Lua 代码中把最终结果通过 <code>return</code> 语句返回给外面的 Nginx 变量 <code>$c</code>；最后， <a href="http://wiki.nginx.org/HttpLuaModule" target="_blank">ngx_lua</a> 模块在给 <code>$c</code> 实际赋值之前，也会把 <code>return</code> 语句返回的数值类型的结果，也就是 Lua 加法计算得出的“和”，自动转换为字符串（这同样是因为 Nginx 变量的值只能是字符串）。
+</p>
+<p>这个例子的实际运行结果符合我们的期望：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;32&nbsp;+&nbsp;56&nbsp;=&nbsp;88<br/>
+</code><p>于是这验证了  <a href="http://wiki.nginx.org/HttpLuaModule#set_by_lua" target="_blank">set_by_lua</a> 指令确实也可以和  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 这样的  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块提供的指令混合在一起工作。
+</p>
+<p>还有不少第三方模块，例如 <a href="#01-NginxVariables08">Nginx 变量漫谈（八）</a> 中介绍过的  <a href="http://wiki.nginx.org/HttpArrayVarModule" target="_blank">ngx_array_var</a> 以及后面即将接触到的用于加解密用户会话（session）的  <a href="http://wiki.nginx.org/HttpEncryptedSessionModule" target="_blank">ngx_encrypted_session</a>，也都可以和  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的指令无缝混合工作。
+</p>
+<p>标准  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的应用是如此广泛，所以能够和它的配置指令混合使用的第三方模块是幸运的。事实上，上面提到的这些第三方模块都采用了特殊的技术，将它们自己的配置指令“注入”到了  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块的指令序列中（它们都借助了 Marcus Clyne 编写的第三方模块 <a href="https://github.com/simpl/ngx_devel_kit" target="_blank">ngx_devel_kit</a>）。换句话说，更多常规的在 Nginx 的 <code>rewrite</code> 阶段注册和运行指令的第三方模块就没那么幸运了。这些“常规模块”的指令虽然也运行在 <code>rewrite</code> 阶段，但其配置指令和  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块（以及同一阶段内的其他模块）都是分开独立执行的。在运行时，不同模块的配置指令集之间的先后顺序一般是不确定的（严格来说，一般是由模块的加载顺序决定的，但也有例外的情况）。比如 <code>A</code> 和 <code>B</code> 两个模块都在 <code>rewrite</code> 阶段运行指令，于是要么是 <code>A</code> 模块的所有指令全部执行完再执行 <code>B</code> 模块的那些指令，要么就是反过来，把 <code>B</code> 的指令全部执行完，再去运行 <code>A</code> 的指令。除非模块的文档中有明确的交待，否则用户一般不应编写依赖于此种不确定顺序的配置。</p>

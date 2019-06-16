@@ -1,0 +1,117 @@
+    <h3 id="02-NginxDirectiveExecOrder01">Nginx 配置指令的执行顺序（一）</h3>
+<p>大多数 Nginx 新手都会频繁遇到这样一个困惑，那就是当同一个 <code>location</code> 配置块使用了多个 Nginx 模块的配置指令时，这些指令的执行顺序很可能会跟它们的书写顺序大相径庭。于是许多人选择了“试错法”，然后他们的配置文件就时常被改得一片狼藉。这个系列的教程就旨在帮助读者逐步地理解这些配置指令背后的执行时间和先后顺序的奥秘。
+</p>
+<p>现在就来看这样一个令人困惑的例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;?&nbsp;}<br/>
+</code><p>从这个例子的本意来看，我们期望的输出是一行 <code>32</code> 和一行 <code>56</code>，因为我们第一次用  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 配置指令输出了 <code>$a</code> 变量的值以后，又紧接着使用  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 配置指令修改了 <code>$a</code>. 然而不幸的是，事实并非如此：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;56<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;56<br/>
+</code><p>我们看到，语句 <code>set $a 56</code> 似乎在第一条 <code>echo $a</code> 语句之前就执行过了。这究竟是为什么呢？难道我们遇到了 Nginx 中的一个 bug？
+</p>
+<p>显然，这里并没有 Nginx 的 bug；要理解这里发生的事情，就首先需要知道 Nginx 处理每一个用户请求时，都是按照若干个不同阶段（phase）依次处理的。
+</p>
+<p>Nginx 的请求处理阶段共有 11 个之多，我们先介绍其中 3 个比较常见的。按照它们执行时的先后顺序，依次是 <code>rewrite</code> 阶段、<code>access</code> 阶段以及 <code>content</code> 阶段（后面我们还有机会见到其他更多的处理阶段）。
+</p>
+<p>所有 Nginx 模块提供的配置指令一般只会注册并运行在其中的某一个处理阶段。比如上例中的  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令就是在 <code>rewrite</code> 阶段运行的，而  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令就只会在 <code>content</code> 阶段运行。前面我们已经知道，在单个请求的处理过程中，<code>rewrite</code> 阶段总是在 <code>content</code> 阶段之前执行，因此属于 <code>rewrite</code> 阶段的配置指令也总是会无条件地在 <code>content</code> 阶段的配置指令之前执行。于是在同一个 <code>location</code> 配置块中， <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令总是会在  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令之前执行，即使我们在配置文件中有意把  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句写在  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 语句的后面。
+</p>
+<p>回到刚才那个例子，
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+</code><p>实际的执行顺序应当是
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+</code><p>即先在 <code>rewrite</code> 阶段执行完这里的两条  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 赋值语句，然后再在后面的 <code>content</code> 阶段依次执行那两条  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 语句。分属两个不同处理阶段的配置指令之间是不能穿插着运行的。
+</p>
+<p>为了进一步验证这一点，我们不妨借助 Nginx 的“调试日志”（debug log）来一窥 Nginx 的实际执行过程。
+</p>
+<p>因为这是我们第一次提及 Nginx 的“调试日志”，所以有必要先简单介绍一下它的启用方法。“调试日志”默认是禁用的，因为它会引入比较大的运行时开销，让 Nginx 服务器显著变慢。一般我们需要重新编译和构造 Nginx 可执行文件，并且在调用 Nginx 源码包提供的 <code>./configure</code> 脚本时传入 <code>--with-debug</code> 命令行选项。例如我们下载完 Nginx 源码包后在 Linux 或者 Mac OS X 等系统上构建时，典型的步骤是这样的：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;tar&nbsp;xvf&nbsp;nginx-1.0.10.tar.gz<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;cd&nbsp;nginx-1.0.10/<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;./configure&nbsp;--with-debug<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;make<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;sudu&nbsp;make&nbsp;install<br/>
+</code><p>如果你使用的是我维护的 <a href="http://openresty.org" target="_blank">ngx_openresty</a> 软件包，则同样可以向它的 <code>./configure</code> 脚本传递 <code>--with-debug</code> 命令行选项。
+</p>
+<p>当我们启用 <code>--with-debug</code> 选项重新构建好调试版的 Nginx 之后，还需要同时在配置文件中通过标准的  <a href="http://wiki.nginx.org/CoreModule#error_log" target="_blank">error_log</a> 配置指令为错误日志使用 <code>debug</code> 日志级别（这同时也是最低的日志级别）：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;error_log&nbsp;logs/error.log&nbsp;debug;<br/>
+</code><p>这里重要的是  <a href="http://wiki.nginx.org/CoreModule#error_log" target="_blank">error_log</a> 指令的第二个参数，<code>debug</code>，而前面第一个参数是错误日志文件的路径，<code>logs/error.log</code>. 当然，你也可以指定其他路径，但后面我们会检查这个文件的内容，所以请特别留意一下这里实际配置的文件路径。
+</p>
+<p>现在我们重新启动 Nginx（注意，如果 Nginx 可执行文件也被更新过，仅仅让 Nginx 重新加载配置是不够的，需要关闭再启动 Nginx 主服务进程），然后再请求一下我们刚才那个示例接口：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;56<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;56<br/>
+</code><p>现在可以检查一下前面配置的 Nginx 错误日志文件中的输出。因为文件中的输出比较多（在我的机器上有 700 多行），所以不妨用 <code>grep</code> 命令在终端上过滤出我们感兴趣的部分：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;grep&nbsp;-E&nbsp;'http&nbsp;(output&nbsp;filter|script&nbsp;(set|value))'&nbsp;logs/error.log<br/>
+</code><p>在我机器上的输出是这个样子的（为了方便呈现，这里对 <code>grep</code> 命令的实际输出作了一些简单的编辑，略去了每一行的行首时间戳）：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;32&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;56&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;output&nbsp;filter&nbsp;&quot;/test?&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;output&nbsp;filter&nbsp;&quot;/test?&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;output&nbsp;filter&nbsp;&quot;/test?&quot;<br/>
+</code><p>这里需要稍微解释一下这些调试信息的具体含义。 <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 配置指令在实际运行时会打印出两行以 <code>http script</code> 起始的调试信息，其中第一行信息是  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句中被赋予的值，而第二行则是  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句中被赋值的 Nginx 变量名。于是上面首先过滤出来的
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;32&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+</code><p>这两行就对应我们例子中的配置语句
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+</code><p>而接下来这两行调试信息
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;value:&nbsp;&quot;56&quot;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;script&nbsp;set&nbsp;$a<br/>
+</code><p>则对应配置语句
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+</code><p>此外，凡在 Nginx 中输出响应体数据时，都会调用 Nginx 的所谓“输出过滤器”（output filter），我们一直在使用的  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令自然也不例外。而一旦调用 Nginx 的“输出过滤器”，便会产生类似下面这样的调试信息：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[debug]&nbsp;5363#0:&nbsp;*1&nbsp;http&nbsp;output&nbsp;filter&nbsp;&quot;/test?&quot;<br/>
+</code><p>当然，这里的 <code>"/test?"</code> 部分对于其他接口可能会发生变化，因为它显示的是当前请求的 URI. 这样联系起来看，就不难发现，上例中的那两条  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句确实都是在那两条  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 语句之前执行的。
+</p>
+<p>细心的读者可能会问，为什么这个例子明明只使用了两条  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 语句进行输出，但却有三行 <code>http output filter</code> 调试信息呢？其实，前两行 <code>http output filter</code> 信息确实分别对应那两条  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 语句，而最后那一行信息则是对应  <a href="http://wiki.nginx.org/HttpEchoModule" target="_blank">ngx_echo</a> 模块输出指示响应体末尾的结束标记。正是为了输出这个特殊的结束标记，才会多出一次对 Nginx “输出过滤器”的调用。包括  <a href="http://wiki.nginx.org/HttpProxyModule" target="_blank">ngx_proxy</a> 在内的许多模块在输出响应体数据流时都具有此种行为。
+</p>
+<p>现在我们就不会再为前面那个例子输出两行一模一样的 <code>56</code> 而感到惊讶了。我们根本没有机会在第二条  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句之前用  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 输出。幸运的是，仍然可以借助一些小技巧来达到最初的目的：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$saved_a&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;56;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$saved_a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;$a;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>此时的输出便符合那个问题示例的初衷了：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;32<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;56<br/>
+</code><p>这里通过引入新的用户变量 <code>$saved_a</code>，在改写 <code>$a</code> 之前及时保存了 <code>$a</code> 的初始值。而对于多条  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 指令而言，它们之间的执行顺序是由  <a href="http://wiki.nginx.org/HttpRewriteModule" target="_blank">ngx_rewrite</a> 模块来保证与书写顺序相一致的。同理， <a href="http://wiki.nginx.org/HttpEchoModule" target="_blank">ngx_echo</a> 模块自身也会保证它的多条  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令之间的执行顺序。
+</p>
+<p>细心的读者应当发现，我们在 <a href="#01-NginxVariables01">Nginx 变量漫谈系列</a> 的示例中已经广泛使用了这种技巧，来绕过因处理阶段而引起的指令执行顺序上的限制。
+</p>
+<p>看到这里，有的读者可能会问：“那么我在使用一条陌生的配置指令之前，如何知道它究竟运行在哪一个处理阶段呢？”答案是：查看该指令的文档（当然，高级开发人员也可以直接查看模块的 C 源码）。在许多模块的文档中，都会专门标记其配置指令所运行的具体阶段。例如  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令的文档中有这么一行：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;phase:&nbsp;content<br/>
+</code><p>这一行便是说，当前配置指令运行在 <code>content</code> 阶段。如果你使用的 Nginx 模块碰巧没有指示运行阶段的文档，可以直接联系该模块的作者请求补充。不过，值得一提的是，并非所有的配置指令都与某个处理阶段相关联，例如我们先前在 <a href="#01-NginxVariables01">Nginx 变量漫谈（一）</a> 中提到过的  <a href="http://wiki.nginx.org/HttpGeoModule#geo" target="_blank">geo</a> 指令以及在 <a href="#01-NginxVariables04">Nginx 变量漫谈（四）</a> 中介绍过的  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令。这些不与处理阶段相关联的配置指令基本上都是“声明性的”（declarative），即不直接产生某种动作或者过程。Nginx 的作者 Igor Sysoev 在公开场合曾不止一次地强调，Nginx 配置文件所使用的语言本质上是“声明性的”，而非“过程性的”（procedural）。</p>

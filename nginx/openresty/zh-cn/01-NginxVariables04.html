@@ -1,0 +1,61 @@
+    <h3 id="01-NginxVariables04">Nginx 变量漫谈（四）</h3>
+<p>在设置了“取处理程序”的情况下，Nginx 变量也可以选择将其值容器用作缓存，这样在多次读取变量的时候，就只需要调用“取处理程序”计算一次。我们下面就来看一个这样的例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;map&nbsp;$args&nbsp;$foo&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;debug&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;server&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;listen&nbsp;8080;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/test&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$orig_foo&nbsp;$foo;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$args&nbsp;debug;<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;original&nbsp;foo:&nbsp;$orig_foo&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;foo:&nbsp;$foo&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这里首次用到了标准  <a href="http://wiki.nginx.org/HttpMapModule" target="_blank">ngx_map</a> 模块的  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 配置指令，我们有必要在此介绍一下。<code>map</code> 在英文中除了“地图”之外，也有“映射”的意思。比方说，中学数学里讲的“函数”就是一种“映射”。而 Nginx 的这个  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令就可以用于定义两个 Nginx 变量之间的映射关系，或者说是函数关系。回到上面这个例子，我们用  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令定义了用户变量 <code>$foo</code> 与  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 内建变量之间的映射关系。特别地，用数学上的函数记法 <code>y = f(x)</code> 来说，我们的 <code>$args</code> 就是“自变量” <code>x</code>，而 <code>$foo</code> 则是“因变量” <code>y</code>，即 <code>$foo</code> 的值是由  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值来决定的，或者按照书写顺序可以说，我们将  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 变量的值映射到了 <code>$foo</code> 变量上。
+</p>
+<p>现在我们再来看  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令定义的映射规则：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;map&nbsp;$args&nbsp;$foo&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;default&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;0;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;debug&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;1;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>花括号中第一行的 <code>default</code> 是一个特殊的匹配条件，即当其他条件都不匹配的时候，这个条件才匹配。当这个默认条件匹配时，就把“因变量” <code>$foo</code> 映射到值 <code>0</code>. 而花括号中第二行的意思是说，如果“自变量” <code>$args</code> 精确匹配了 <code>debug</code> 这个字符串，则把“因变量” <code>$foo</code> 映射到值 <code>1</code>. 将这两行合起来，我们就得到如下完整的映射规则：当  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值等于 <code>debug</code> 的时候，<code>$foo</code> 变量的值就是 <code>1</code>，否则 <code>$foo</code> 的值就为 <code>0</code>.
+</p>
+<p>明白了  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令的含义，再来看 <code>location /test</code>. 在那里，我们先把当前 <code>$foo</code> 变量的值保存在另一个用户变量 <code>$orig_foo</code> 中，然后再强行把  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值改写为 <code>debug</code>，最后我们再用  <a href="http://wiki.nginx.org/HttpEchoModule#echo" target="_blank">echo</a> 指令分别输出 <code>$orig_foo</code> 和 <code>$foo</code> 的值。
+</p>
+<p>从逻辑上看，似乎当我们强行改写  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值为 <code>debug</code> 之后，根据先前的  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 映射规则，<code>$foo</code> 变量此时的值应当自动调整为字符串 <code>1</code>, 而不论 <code>$foo</code> 原先的值是怎样的。然而测试结果并非如此：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;original&nbsp;foo:&nbsp;0<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;foo:&nbsp;0<br/>
+</code><p>第一行输出指示 <code>$orig_foo</code> 的值为 <code>0</code>，这正是我们期望的：上面这个请求并没有提供 URL 参数串，于是  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 最初的取值就是空，再根据我们先前定义的映射规则，<code>$foo</code> 变量在第一次被读取时的值就应当是 <code>0</code>（即匹配默认的那个 <code>default</code> 条件）。
+</p>
+<p>而第二行输出显示，在强行改写  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 变量的值为字符串 <code>debug</code> 之后，<code>$foo</code> 的条件仍然是 <code>0</code> ，这显然不符合映射规则，因为当  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 为 <code>debug</code> 时，<code>$foo</code> 的值应当是 <code>1</code>. 这究竟是为什么呢？
+</p>
+<p>其实原因很简单，那就是 <code>$foo</code> 变量在第一次读取时，根据映射规则计算出的值被缓存住了。刚才我们说过，Nginx 模块可以为其创建的变量选择使用值容器，作为其“取处理程序”计算结果的缓存。显然， <a href="http://wiki.nginx.org/HttpMapModule" target="_blank">ngx_map</a> 模块认为变量间的映射计算足够昂贵，需要自动将因变量的计算结果缓存下来，这样在当前请求的处理过程中如果再次读取这个因变量，Nginx 就可以直接返回缓存住的结果，而不再调用该变量的“取处理程序”再行计算了。
+</p>
+<p>为了进一步验证这一点，我们不妨在请求中直接指定 URL 参数串为 <code>debug</code>:
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/test?debug'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;original&nbsp;foo:&nbsp;1<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;foo:&nbsp;1<br/>
+</code><p>我们看到，现在 <code>$orig_foo</code> 的值就成了 <code>1</code>，因为变量 <code>$foo</code> 在第一次被读取时，自变量  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 的值就是 <code>debug</code>，于是按照映射规则，“取处理程序”计算返回的值便是 <code>1</code>. 而后续再读取 <code>$foo</code> 的值时，就总是得到被缓存住的 <code>1</code> 这个结果，而不论  <a href="http://wiki.nginx.org/HttpCoreModule#.24args" target="_blank">$args</a> 后来变成什么样了。
+</p>
+<p> <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令其实是一个比较特殊的例子，因为它可以为用户变量注册“取处理程序”，而且用户可以自己定义这个“取处理程序”的计算规则。当然，此规则在这里被限定为与另一个变量的映射关系。同时，也并非所有使用了“取处理程序”的变量都会缓存结果，例如我们前面在 <a href="#01-NginxVariables03">（三）</a> 中已经看到  <a href="http://wiki.nginx.org/HttpCoreModule#.24arg_PARAMETER" target="_blank">$arg_XXX</a> 并不会使用值容器进行缓存。
+</p>
+<p>类似  <a href="http://wiki.nginx.org/HttpMapModule" target="_blank">ngx_map</a> 模块，标准的  <a href="http://wiki.nginx.org/HttpGeoModule" target="_blank">ngx_geo</a> 等模块也一样使用了变量值的缓存机制。
+</p>
+<p>在上面的例子中，我们还应当注意到  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令是在 <code>server</code> 配置块之外，也就是在最外围的 <code>http</code> 配置块中定义的。很多读者可能会对此感到奇怪，毕竟我们只是在 <code>location /test</code> 中用到了它。这倒不是因为我们不想把 <code>map</code> 语句直接挪到 <code>location</code> 配置块中，而是因为  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 指令只能在 <code>http</code> 块中使用！
+</p>
+<p>很多 Nginx 新手都会担心如此“全局”范围的  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 设置会让访问所有虚拟主机的所有 <code>location</code> 接口的请求都执行一遍变量值的映射计算，然而事实并非如此。前面我们已经了解到  <a href="http://wiki.nginx.org/HttpMapModule#map" target="_blank">map</a> 配置指令的工作原理是为用户变量注册 “取处理程序”，并且实际的映射计算是在“取处理程序”中完成的，而“取处理程序”只有在该用户变量被实际读取时才会执行（当然，因为缓存的存在，只在请求生命期中的第一次读取中才被执行），所以对于那些根本没有用到相关变量的请求来说，就根本不会执行任何的无用计算。
+</p>
+<p>这种只在实际使用对象时才计算对象值的技术，在计算领域被称为“惰性求值”（lazy evaluation）。提供“惰性求值” 语义的编程语言并不多见，最经典的例子便是 Haskell. 与之相对的便是“主动求值” （eager evaluation）。我们有幸在 Nginx 中也看到了“惰性求值”的例子，但“主动求值”语义其实在 Nginx 里面更为常见，例如下面这行再普通不过的  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 语句：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$b&nbsp;&quot;$a,$a&quot;;<br/>
+</code><p>这里会在执行  <a href="http://wiki.nginx.org/HttpRewriteModule#set" target="_blank">set</a> 规定的赋值操作时，“主动”地计算出变量 <code>$b</code> 的值，而不会将该求值计算延缓到变量 <code>$b</code> 实际被读取的时候。</p>

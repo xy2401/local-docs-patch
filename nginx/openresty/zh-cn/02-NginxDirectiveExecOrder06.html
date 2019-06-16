@@ -1,0 +1,64 @@
+    <h3 id="02-NginxDirectiveExecOrder06">Nginx 配置指令的执行顺序（六）</h3>
+<p>前面我们在 <a href="#02-NginxDirectiveExecOrder05">（五）</a> 中提到，在一个 <code>location</code> 中使用 <code>content</code> 阶段指令时，通常情况下就是对应的 Nginx 模块注册该 <code>location</code> 中的“内容处理程序”。那么当一个 <code>location</code> 中未使用任何 <code>content</code> 阶段的指令，即没有模块注册“内容处理程序”时，<code>content</code> 阶段会发生什么事情呢？谁又来担负起生成内容和输出响应的重担呢？答案就是那些把当前请求的 URI 映射到文件系统的静态资源服务模块。当存在“内容处理程序”时，这些静态资源服务模块并不会起作用；反之，请求的处理权就会自动落到这些模块上。
+</p>
+<p>Nginx 一般会在 <code>content</code> 阶段安排三个这样的静态资源服务模块（除非你的 Nginx 在构造时显式禁用了这三个模块中的一个或者多个，又或者启用了这种类型的其他模块）。按照它们在 <code>content</code> 阶段的运行顺序，依次是  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块， <a href="http://wiki.nginx.org/HttpAutoindexModule" target="_blank">ngx_autoindex</a> 模块，以及 <code>ngx_static</code> 模块。下面就来逐一介绍一下这三个模块。
+</p>
+<p> <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 和  <a href="http://wiki.nginx.org/HttpAutoindexModule" target="_blank">ngx_autoindex</a> 模块都只会作用于那些 URI 以 <code>/</code> 结尾的请求，例如请求 <code>GET /cats/</code>，而对于不以 <code>/</code> 结尾的请求则会直接忽略，同时把处理权移交给 <code>content</code> 阶段的下一个模块。而 <code>ngx_static</code> 模块则刚好相反，直接忽略那些 URI 以 <code>/</code> 结尾的请求。
+</p>
+<p> <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块主要用于在文件系统目录中自动查找指定的首页文件，类似 <code>index.html</code> 和 <code>index.htm</code> 这样的，例如：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;root&nbsp;/var/www/;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;index&nbsp;index.htm&nbsp;index.html;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>这样，当用户请求 <code>/</code> 地址时，Nginx 就会自动在  <a href="http://wiki.nginx.org/HttpCoreModule#root" target="_blank">root</a> 配置指令指定的文件系统目录下依次寻找 <code>index.htm</code> 和 <code>index.html</code> 这两个文件。如果 <code>index.htm</code> 文件存在，则直接发起“内部跳转”到 <code>/index.htm</code> 这个新的地址；而如果 <code>index.htm</code> 文件不存在，则继续检查 <code>index.html</code> 是否存在。如果存在，同样发起“内部跳转”到 <code>/index.html</code>；如果 <code>index.html</code> 文件仍然不存在，则放弃处理权给 <code>content</code> 阶段的下一个模块。
+</p>
+<p>我们前面已经在 <a href="#01-NginxVariables02">Nginx 变量漫谈（二）</a> 中提到，  <a href="http://wiki.nginx.org/HttpEchoModule#echo_exec" target="_blank">echo_exec</a> 指令和  <a href="http://wiki.nginx.org/HttpRewriteModule#rewrite" target="_blank">rewrite</a> 指令可以发起“内部跳转”。这种跳转会自动修改当前请求的 URI，并且重新匹配与之对应的 <code>location</code> 配置块，再重新执行 <code>rewrite</code>、<code>access</code>、<code>content</code> 等处理阶段。因为是“内部跳转”，所以有别于 HTTP 协议中定义的基于 302 和 301 响应的“外部跳转”，最终用户的浏览器的地址栏也不会发生变化，依然是原来的 URI 位置。而  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块一旦找到了  <a href="http://wiki.nginx.org/HttpIndexModule#index" target="_blank">index</a> 指令中列举的文件之后，就会发起这样的“内部跳转”，仿佛用户是直接请求的这个文件所对应的 URI 一样。
+</p>
+<p>为了进一步确认  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块在找到文件时的“内部跳转”行为，我们不妨设计下面这个小例子：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;root&nbsp;/var/www/;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;index&nbsp;index.html;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/index.html&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;set&nbsp;$a&nbsp;32;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;echo&nbsp;&quot;a&nbsp;=&nbsp;$a&quot;;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>此时我们在本机的 <code>/var/www/</code> 目录下创建一个空白的 <code>index.html</code> 文件，并确保该文件的权限设置对于运行 Nginx worker 进程的帐户可读。然后我们来请求一下根位置（<code>/</code>）：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;a&nbsp;=&nbsp;32<br/>
+</code><p>这里发生了什么？为什么输出不是 <code>index.html</code> 文件的内容（即空白）？首先对于用户的原始请求 <code>GET /</code>，Nginx 匹配出 <code>location /</code> 来处理它，然后 <code>content</code> 阶段的  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块在 <code>/var/www/</code> 下找到了 <code>index.html</code>，于是立即发起一个到 <code>/index.html</code> 位置的“内部跳转”。
+</p>
+<p>到这里，相信大家都不会有问题。接下来有趣的事情发生了！在重新为 <code>/index.html</code> 这个新位置匹配 <code>location</code> 配置块时，<code>location /index.html</code> 的优先级要高于 <code>location /</code>，因为 <code>location</code> 块按照 URI 前缀来匹配时遵循所谓的“最长子串匹配语义”。这样，在进入 <code>location /index.html</code> 配置块之后，又重新开始执行 <code>rewrite</code> 、<code>access</code>、以及 <code>content</code> 等阶段。最终输出 <code>a = 32</code> 自然也就在情理之中了。
+</p>
+<p>我们接着研究上面这个例子。如果此时把 <code>/var/www/index.html</code> 文件删除，再访问 <code>/</code> 又会发生什么事情呢？答案是返回 <code>403 Forbidden</code> 出错页。为什么呢？因为  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块找不到  <a href="http://wiki.nginx.org/HttpIndexModule#index" target="_blank">index</a> 指令指定的文件（在这里就是 <code>index.html</code>），接着把处理权转给 <code>content</code> 阶段的后续模块，而后续的模块也都无法处理这个请求，于是 Nginx 只好放弃，输出了错误页，并且在 Nginx 错误日志中留下了类似这一行信息：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;[error]&nbsp;28789#0:&nbsp;*1&nbsp;directory&nbsp;index&nbsp;of&nbsp;&quot;/var/www/&quot;&nbsp;is&nbsp;forbidden<br/>
+</code><p>所谓 <code>directory index</code> 便是生成“目录索引”的意思，典型的方式就是生成一个网页，上面列举出 <code>/var/www/</code> 目录下的所有文件和子目录。而运行在  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块之后的  <a href="http://wiki.nginx.org/HttpAutoindexModule" target="_blank">ngx_autoindex</a> 模块就可以用于自动生成这样的“目录索引”网页。我们来把上例修改一下：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;location&nbsp;/&nbsp;{<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;root&nbsp;/var/www/;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;index&nbsp;index.html;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;autoindex&nbsp;on;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br/>
+</code><p>此时仍然保持文件系统中的 <code>/var/www/index.html</code> 文件不存在。我们再访问 <code>/</code> 位置时，就会得到一张漂亮的网页：
+</p>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;$&nbsp;curl&nbsp;'http://localhost:8080/'<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;html&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;head&gt;&lt;title&gt;Index&nbsp;of&nbsp;/&lt;/title&gt;&lt;/head&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;body&nbsp;bgcolor=&quot;white&quot;&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;h1&gt;Index&nbsp;of&nbsp;/&lt;/h1&gt;&lt;hr&gt;&lt;pre&gt;&lt;a&nbsp;href=&quot;../&quot;&gt;../&lt;/a&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;a&nbsp;href=&quot;cgi-bin/&quot;&gt;cgi-bin/&lt;/a&gt;&nbsp;&nbsp;08-Mar-2010&nbsp;19:36&nbsp;&nbsp;&nbsp;-<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;a&nbsp;href=&quot;error/&quot;&gt;error/&lt;/a&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;08-Mar-2010&nbsp;19:36&nbsp;&nbsp;&nbsp;-<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;a&nbsp;href=&quot;htdocs/&quot;&gt;htdocs/&lt;/a&gt;&nbsp;&nbsp;&nbsp;&nbsp;05-Apr-2010&nbsp;03:55&nbsp;&nbsp;&nbsp;-<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;a&nbsp;href=&quot;icons/&quot;&gt;icons/&lt;/a&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;08-Mar-2010&nbsp;19:36&nbsp;&nbsp;&nbsp;-<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/pre&gt;&lt;hr&gt;&lt;/body&gt;<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;&lt;/html&gt;<br/>
+</code><p>生成的 HTML 源码显示，我本机的 <code>/var/www/</code> 目录下还有 <code>cgi-bin/</code>, <code>error/</code>, <code>htdocs/</code>, 以及 <code>icons/</code> 这几个子目录。在你的系统中尝试上面的例子，输出很可能会不太一样。
+</p>
+<p>值得一提的是，当你的文件系统中存在 <code>/var/www/index.html</code> 时，优先运行的  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块就会发起“内部跳转”，根本轮不到  <a href="http://wiki.nginx.org/HttpAutoindexModule" target="_blank">ngx_autoindex</a> 执行。感兴趣的读者可以自己测试一下。
+</p>
+<p>在 <code>content</code> 阶段默认“垫底”的最后一个模块便是极为常用的 <code>ngx_static</code> 模块。这个模块主要实现服务静态文件的功能。比方说，一个网站的静态资源，包括静态 <code>.html</code> 文件、静态 <code>.css</code> 文件、静态 <code>.js</code> 文件、以及静态图片文件等等，全部可以通过这个模块对外服务。前面介绍的  <a href="http://wiki.nginx.org/HttpIndexModule" target="_blank">ngx_index</a> 模块虽然可以在指定的首页文件存在时发起“内部跳转”，但真正把相应的首页文件服务出去（即把该文件的内容作为响应体数据输出，并设置相应的响应头），还是得靠这个 <code>ngx_static</code> 模块来完成。</p>
